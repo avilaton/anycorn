@@ -39,6 +39,9 @@ from .utils import (
 )
 from .worker_context import WorkerContext
 
+MAX_RSS_CHECK_INTERVAL = 30
+_BYTES_PER_MIB = 1024 * 1024
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from multiprocessing.context import BaseContext
@@ -49,6 +52,49 @@ if TYPE_CHECKING:
 
 if sys.version_info < (3, 11):
     from exceptiongroup import BaseExceptionGroup
+
+
+def _read_current_rss() -> int | None:
+    """Return this process's current RSS in bytes, or None when unavailable."""
+    try:
+        with open("/proc/self/status") as proc_status:  # noqa: PTH123
+            for line in proc_status:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError):
+        return None
+
+    return None
+
+
+async def _watch_max_rss(
+    context: WorkerContext,
+    config: Config,
+    read_current_rss: Callable[[], int | None] | None = None,
+) -> None:
+    if config.max_rss is None:
+        return
+
+    read_current_rss = _read_current_rss if read_current_rss is None else read_current_rss
+    max_rss = config.max_rss * _BYTES_PER_MIB
+    while True:
+        await context.sleep(MAX_RSS_CHECK_INTERVAL)
+        current_rss = read_current_rss()
+        if current_rss is None:
+            await config.log.warning(
+                "max_rss is set but current RSS is unavailable on this platform; "
+                "RSS recycling disabled"
+            )
+            return
+
+        if current_rss > max_rss:
+            await config.log.info(
+                "Worker RSS %.1f MiB exceeded max_rss %d MiB; recycling worker",
+                current_rss / _BYTES_PER_MIB,
+                config.max_rss,
+            )
+            await context.terminate.set()
+            return
 
 
 def run(config: Config) -> int:  # noqa: C901, PLR0912, PLR0915
@@ -315,6 +361,7 @@ async def worker_serve(  # noqa: C901, PLR0912, PLR0915
                     if shutdown_trigger is not None:
                         tg.start_soon(raise_shutdown, shutdown_trigger, context.terminated.set)
                     tg.start_soon(raise_shutdown, context.terminate.wait, context.terminated.set)
+                    tg.start_soon(_watch_max_rss, context, config)
 
                     for udp_server in udp_servers:
                         await tg.start(udp_server.run)
