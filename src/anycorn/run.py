@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 import anyio
 import anyio.abc
 import anyio.streams.tls
+import psutil
 import sniffio
 
 from .datagram import wrap_datagram_socket
@@ -54,23 +55,15 @@ if sys.version_info < (3, 11):
     from exceptiongroup import BaseExceptionGroup
 
 
-def _read_current_rss() -> int | None:
-    """Return this process's current RSS in bytes, or None when unavailable."""
-    try:
-        with open("/proc/self/status") as proc_status:  # noqa: PTH123
-            for line in proc_status:
-                if line.startswith("VmRSS:"):
-                    return int(line.split()[1]) * 1024
-    except (OSError, ValueError):
-        return None
-
-    return None
+def _read_current_rss() -> int:
+    """Return this process's current RSS in bytes."""
+    return psutil.Process().memory_info().rss
 
 
 async def _watch_max_rss(
     context: WorkerContext,
     config: Config,
-    read_current_rss: Callable[[], int | None] | None = None,
+    read_current_rss: Callable[[], int] | None = None,
 ) -> None:
     if config.max_rss is None:
         return
@@ -80,13 +73,6 @@ async def _watch_max_rss(
     while True:
         await context.sleep(MAX_RSS_CHECK_INTERVAL)
         current_rss = read_current_rss()
-        if current_rss is None:
-            await config.log.warning(
-                "max_rss is set but current RSS is unavailable on this platform; "
-                "RSS recycling disabled"
-            )
-            return
-
         if current_rss > max_rss:
             await config.log.info(
                 "Worker RSS %.1f MiB exceeded max_rss %d MiB; recycling worker",

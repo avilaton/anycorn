@@ -50,6 +50,3 @@ periodically and uses the same graceful shutdown path as request-count recycling
 requests can drain until `graceful_timeout` before the master process respawns the worker. When
 `--workers 0` is used, no master process exists to respawn the worker; exceeding `max_rss` stops
 that single worker, matching `max_requests` behavior.
-
-RSS sampling currently reads Linux `/proc/self/status`. On platforms where the current RSS is not
-available, Anycorn logs a warning and leaves RSS recycling disabled.

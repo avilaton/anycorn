@@ -167,27 +167,6 @@ async def test_watch_max_rss_terminates_worker_when_over_limit(
 
 
 @pytest.mark.anyio
-async def test_watch_max_rss_disables_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    config = Config()
-    config.max_rss = 1
-    context = WorkerContext(None)
-    warnings: list[str] = []
-
-    async def warning(message: str) -> None:
-        warnings.append(message)
-
-    monkeypatch.setattr(config.log, "warning", warning)
-    monkeypatch.setattr(anycorn.run, "MAX_RSS_CHECK_INTERVAL", 0)
-
-    await anycorn.run._watch_max_rss(context, config, lambda: None)
-
-    assert not context.terminate.is_set()
-    assert warnings == [
-        "max_rss is set but current RSS is unavailable on this platform; RSS recycling disabled"
-    ]
-
-
-@pytest.mark.anyio
 async def test_worker_serve_terminates_when_over_max_rss(monkeypatch: pytest.MonkeyPatch) -> None:
     config = Config()
     config.bind = ["127.0.0.1:0"]
